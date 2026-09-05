@@ -7,14 +7,21 @@ Common code shared between server.py and server_legacy.py
 import os
 import sys
 import json
+import base64
 import asyncio
 import http.client
 import importlib
+import subprocess
 import traceback
 from enum import Enum
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+# Keep in sync with go/worker/sandbox/tool_sandbox.go maxToolOutputBytes
+_TOOL_MAX_OUTPUT = 1 << 20
+_TOOL_DEFAULT_TIMEOUT_MS = 30000
+_TOOL_WORKSPACE = "/host/workspace"
 
 
 class EntryType(Enum):
@@ -73,6 +80,112 @@ def handle_func(conn, request, entry_point):
     conn.sendall(b"Connection: close\r\n")
     conn.sendall(b"\r\n")
     conn.sendall(response_body)
+
+
+def _truncate_bytes(data, limit=_TOOL_MAX_OUTPUT):
+    if data is None:
+        return b""
+    if len(data) <= limit:
+        return data
+    return data[:limit]
+
+
+def _send_json(conn, status, status_text, payload):
+    response_body = json.dumps(payload).encode()
+    conn.sendall(f"HTTP/1.1 {status} {status_text}\r\n".encode())
+    conn.sendall(b"Content-Type: application/json\r\n")
+    conn.sendall(f"Content-Length: {len(response_body)}\r\n".encode())
+    conn.sendall(b"Connection: close\r\n")
+    conn.sendall(b"\r\n")
+    conn.sendall(response_body)
+
+
+def handle_tool_exec(conn, request):
+    """
+    Structured one-shot command execution for short-cycle tool sandboxes.
+
+    POST /tool/exec with JSON:
+      cmd, cwd, env, stdin_b64, timeout_ms
+    Response JSON:
+      exit_code, stdout_b64, stderr_b64, timed_out[, error]
+    """
+    try:
+        body = request.read()
+        req = json.loads(body) if body else {}
+        cmd = req.get("cmd")
+        if not cmd or not isinstance(cmd, list):
+            _send_json(conn, 400, "Bad Request", {"error": "cmd must be a non-empty list",
+                                                   "exit_code": -1, "stdout_b64": "", "stderr_b64": "",
+                                                   "timed_out": False})
+            return
+
+        cwd = req.get("cwd") or _TOOL_WORKSPACE
+        os.makedirs(cwd, exist_ok=True)
+
+        env = {
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+        }
+        extra = req.get("env") or {}
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                env[str(k)] = str(v)
+
+        stdin_b64 = req.get("stdin_b64") or ""
+        stdin = base64.b64decode(stdin_b64) if stdin_b64 else b""
+
+        timeout_ms = req.get("timeout_ms", _TOOL_DEFAULT_TIMEOUT_MS)
+        try:
+            timeout_sec = max(0.001, float(timeout_ms) / 1000.0)
+        except (TypeError, ValueError):
+            timeout_sec = _TOOL_DEFAULT_TIMEOUT_MS / 1000.0
+
+        timed_out = False
+        try:
+            completed = subprocess.run(
+                [str(c) for c in cmd],
+                cwd=cwd,
+                env=env,
+                input=stdin,
+                capture_output=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+            exit_code = completed.returncode
+            stdout = _truncate_bytes(completed.stdout)
+            stderr = _truncate_bytes(completed.stderr)
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            exit_code = -1
+            stdout = _truncate_bytes(exc.stdout or b"")
+            stderr = _truncate_bytes(exc.stderr or b"")
+        except Exception as exc:
+            _send_json(conn, 500, "Internal Server Error", {
+                "error": str(exc),
+                "exit_code": -1,
+                "stdout_b64": "",
+                "stderr_b64": "",
+                "timed_out": False,
+            })
+            return
+
+        _send_json(conn, 200, "OK", {
+            "exit_code": exit_code,
+            "stdout_b64": base64.b64encode(stdout).decode("ascii"),
+            "stderr_b64": base64.b64encode(stderr).decode("ascii"),
+            "timed_out": timed_out,
+        })
+    except Exception:
+        _send_json(conn, 500, "Internal Server Error", {
+            "error": traceback.format_exc(),
+            "exit_code": -1,
+            "stdout_b64": "",
+            "stderr_b64": "",
+            "timed_out": False,
+        })
+
 
 
 def handle_wsgi(conn, request, entry_point, app_name, path_info, query_string):
@@ -231,10 +344,27 @@ def web_server_on_sock(file_sock, server_name="server"):
         request = RequestParser(conn)
 
         # Parse path: `/run/<app-name>/a/b/c` -> app_name, `/a/b/c`, query
+        # Also supports `/tool/exec` for short-cycle tool sandboxes.
         parsed = urlparse(request.path)
-        parts = parsed.path.split("/")  # ["", "run", <app-name>, ...]
-        app_name = parts[2]
-        path_info = '/' + '/'.join(parts[3:])
+        path = parsed.path
+
+        if path == "/tool/exec" or path.rstrip("/") == "/tool/exec":
+            if request.command != "POST":
+                _send_json(conn, 405, "Method Not Allowed", {
+                    "error": "POST required",
+                    "exit_code": -1,
+                    "stdout_b64": "",
+                    "stderr_b64": "",
+                    "timed_out": False,
+                })
+            else:
+                handle_tool_exec(conn, request)
+            conn.close()
+            continue
+
+        parts = path.split("/")  # ["", "run", <app-name>, ...]
+        app_name = parts[2] if len(parts) > 2 else ""
+        path_info = '/' + '/'.join(parts[3:]) if len(parts) > 3 else '/'
         query_string = parsed.query
 
         if entry_type == EntryType.FUNC:

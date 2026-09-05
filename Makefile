@@ -3,7 +3,7 @@ WASM_TARGET=wasm32-unknown-unknown
 GO=go
 OL_DIR=$(abspath ./go)
 OL_GO_FILES=$(shell find go/ -name '*.go')
-LAMBDA_FILES = min-image/Dockerfile min-image/Makefile min-image/spin.c min-image/runtimes/python/server.py min-image/runtimes/python/setup.py min-image/runtimes/python/ol.c
+LAMBDA_FILES = min-image/Dockerfile min-image/Makefile min-image/spin.c min-image/runtimes/python/server.py min-image/runtimes/python/server_common.py min-image/runtimes/python/server_legacy.py min-image/runtimes/python/setup.py min-image/runtimes/python/ol.c
 BUILDTYPE?=debug
 INSTALL_PREFIX?=/usr/local
 

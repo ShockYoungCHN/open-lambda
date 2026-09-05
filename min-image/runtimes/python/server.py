@@ -92,6 +92,7 @@ def start_container():
     # messages to the sock file.
     file_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     file_sock.bind(file_sock_path)
+    os.chmod(file_sock_path, 0o666)
     file_sock.listen(1)  # backlog=1: we handle one request at a time, no concurrency
 
     pid = os.fork()

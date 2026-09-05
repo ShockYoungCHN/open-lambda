@@ -50,6 +50,7 @@ def lambda_server():
         os.remove(SOCK_PATH)
     file_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     file_sock.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o666)
     file_sock.listen(1)
 
     # Notify worker server that we are ready
