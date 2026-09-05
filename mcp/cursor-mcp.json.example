@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openlambda-tool-sandbox": {
+      "command": "/ABS/PATH/TO/open-lambda/mcp/.venv/bin/python",
+      "args": ["/ABS/PATH/TO/open-lambda/mcp/ol_tool_mcp.py"],
+      "env": {
+        "OL_TOOL_BASE": "http://127.0.0.1:5000"
+      }
+    }
+  }
+}
