@@ -148,6 +148,11 @@ func (mgr *LambdaMgr) Get(name string) (f *LambdaFunc) {
 	return f
 }
 
+// SandboxPool returns the shared sandbox pool used by lambdas.
+func (mgr *LambdaMgr) SandboxPool() sandbox.SandboxPool {
+	return mgr.sbPool
+}
+
 // Debug returns the debug information of the sandbox pool.
 func (mgr *LambdaMgr) Debug() string {
 	return mgr.sbPool.DebugString() + "\n"

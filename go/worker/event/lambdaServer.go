@@ -92,6 +92,12 @@ func NewLambdaServer(mux *http.ServeMux) (*LambdaServer, error) {
 	mux.HandleFunc(RUN_PATH, server.RunLambda)
 	mux.HandleFunc(DEBUG_PATH, server.Debug)
 
+	toolAPI, err := NewToolAPI(lambdaMgr.SandboxPool())
+	if err != nil {
+		return nil, fmt.Errorf("tool API: %w", err)
+	}
+	toolAPI.Register(mux)
+
 	slog.Info(fmt.Sprintf("Execute handler by POSTing to localhost%s%s%s", port, RUN_PATH, "<lambda>"))
 	slog.Info(fmt.Sprintf("Get status by sending request to localhost%s%s", port, STATUS_PATH))
 
